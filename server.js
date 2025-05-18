@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const unzipper = require('unzipper');
 const { exec } = require('child_process');
+const { Readable } = require('stream');
 require('dotenv').config();
 
 const app = express();
@@ -19,6 +20,7 @@ const BOTS_DIR = path.join(__dirname, 'bots');
 if (!fs.existsSync(BOTS_DIR)) fs.mkdirSync(BOTS_DIR);
 
 let currentBotProcess = null;
+let logStream = [];
 
 app.post('/upload', async (req, res) => {
     if (!req.files || !req.files.zipFile) {
@@ -44,8 +46,8 @@ app.post('/upload', async (req, res) => {
               if (fs.existsSync(path.join(extractPath, 'package.json'))) {
                   exec('npm install', { cwd: extractPath }, (installErr, stdout, stderr) => {
                       if (installErr) {
-                          console.error('NPM Install Error:', stderr);
-                          return res.status(500).send('npm install failed. Check logs.');
+                          logStream.push('[INSTALL ERROR] ' + stderr);
+                          return res.status(500).send('npm install failed.');
                       }
                       runBot(extractPath, res);
                   });
@@ -54,7 +56,7 @@ app.post('/upload', async (req, res) => {
               }
           });
     } catch (err) {
-        console.error('Upload/Extract Error:', err);
+        logStream.push('[UPLOAD ERROR] ' + err.toString());
         return res.status(500).send('Error uploading or extracting file.');
     }
 });
@@ -67,17 +69,21 @@ function runBot(botDir, res) {
 
     if (currentBotProcess) {
         currentBotProcess.kill();
-        console.log('Previous bot process killed.');
+        logStream.push('[INFO] Previous bot process killed.');
     }
 
     currentBotProcess = exec(`node ${entryFile}`, { cwd: botDir });
 
-    currentBotProcess.stdout.on('data', data => console.log(`[BOT LOG]: ${data}`));
-    currentBotProcess.stderr.on('data', data => console.error(`[BOT ERROR]: ${data}`));
-    currentBotProcess.on('exit', code => console.log(`Bot exited with code ${code}`));
+    currentBotProcess.stdout.on('data', data => logStream.push('[BOT LOG] ' + data.toString()));
+    currentBotProcess.stderr.on('data', data => logStream.push('[BOT ERROR] ' + data.toString()));
+    currentBotProcess.on('exit', code => logStream.push('[BOT EXITED] Code ' + code));
 
     return res.send(`Bot started from ${entryFile}`);
 }
+
+app.get('/logs', (req, res) => {
+    res.json(logStream.slice(-100)); // Return last 100 logs
+});
 
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
